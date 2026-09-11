@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+Website/static/uploads/*
+!Website/static/uploads/.gitkeep
+Website/plant_disease_model_1_latest.pt
