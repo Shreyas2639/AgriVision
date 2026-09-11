@@ -1,72 +1,101 @@
 import os
-from flask import Flask, redirect, render_template, request
-from PIL import Image
-import torchvision.transforms.functional as TF
-import CNN
+from pathlib import Path
+
 import numpy as np
-import torch
 import pandas as pd
+import torch
+import torchvision.transforms.functional as TF
+from flask import Flask, render_template, request
+from PIL import Image
+from werkzeug.utils import secure_filename
+
+import CNN
 
 
-disease_info = pd.read_csv('C:\\Users\\sathw\\Downloads\\Plant-Disease-Detection-main\\Plant-Disease-Detection-main\\Flask Deployed App\\disease_info.csv' , encoding='cp1252')
-supplement_info = pd.read_csv('C:\\Users\\sathw\\Downloads\\Plant-Disease-Detection-main\\Plant-Disease-Detection-main\\Flask Deployed App\\supplement_info.csv',encoding='cp1252')
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "static" / "uploads"
+MODEL_PATH = BASE_DIR / "plant_disease_model_1_latest.pt"
 
-model = CNN.CNN(39)    
-model.load_state_dict(torch.load("C:\\Users\\sathw\\Downloads\\Plant-Disease-Detection-main\\Plant-Disease-Detection-main\\Flask Deployed App\\plant_disease_model_1_latest.pt"))
-model.eval()
+disease_info = pd.read_csv(BASE_DIR / "disease_info.csv", encoding="cp1252")
+supplement_info = pd.read_csv(BASE_DIR / "supplement_info.csv", encoding="cp1252")
+
+app = Flask(__name__, template_folder="HTML Templates")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+model = None
+if MODEL_PATH.exists():
+    model = CNN.CNN(39)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.eval()
+
 
 def prediction(image_path):
-    image = Image.open(image_path)
-    image = image.resize((224, 224))
-    input_data = TF.to_tensor(image)
-    input_data = input_data.view((-1, 3, 224, 224))
-    output = model(input_data)
-    output = output.detach().numpy()
-    index = np.argmax(output)
-    return index
+    if model is None:
+        raise RuntimeError(
+            "The trained model file plant_disease_model_1_latest.pt is missing."
+        )
+
+    with Image.open(image_path) as image:
+        image = image.convert("RGB").resize((224, 224))
+        input_data = TF.to_tensor(image).view((-1, 3, 224, 224))
+
+    with torch.no_grad():
+        output = model(input_data)
+
+    return int(np.argmax(output.numpy()))
 
 
-app = Flask(__name__)
-
-@app.route('/')
+@app.route("/")
 def home_page():
-    return render_template('home.html')
+    return render_template("home.html")
 
-# @app.route('/contact')
-# def contact():
-#     return render_template('contact-us.html')
 
-@app.route('/index')
+@app.route("/index")
 def ai_engine_page():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/mobile-device')
-def mobile_device_detected_page():
-    return render_template('mobile-device.html')
 
-@app.route('/submit', methods=['GET', 'POST'])
+@app.route("/submit", methods=["POST"])
 def submit():
-    if request.method == 'POST':
-        image = request.files['image']
-        filename = image.filename
-        file_path = os.path.join('C:\\Users\\sathw\\Downloads\\Plant-Disease-Detection-main\\Plant-Disease-Detection-main\\Flask Deployed App\\static\\uploads', filename)
-        image.save(file_path)
-        print(file_path)
-        pred = prediction(file_path)
-        title = disease_info['disease_name'][pred]
-        description =disease_info['description'][pred]
-        prevent = disease_info['Possible Steps'][pred]
-        image_url = disease_info['image_url'][pred]
-        supplement_name = supplement_info['supplement name'][pred]
-        supplement_image_url = supplement_info['supplement image'][pred]
-        supplement_buy_link = supplement_info['buy link'][pred]
-        return render_template('submit.html' , title = title , desc = description , prevent = prevent , 
-                               image_url = image_url , pred = pred ,sname = supplement_name , simage = supplement_image_url)
+    if model is None:
+        return (
+            "Prediction is unavailable because plant_disease_model_1_latest.pt "
+            "has not been added.",
+            503,
+        )
 
-@app.route('/market', methods=['GET', 'POST'])
+    image = request.files.get("image")
+    if image is None or not image.filename:
+        return "Please select an image.", 400
+
+    filename = secure_filename(image.filename)
+    file_path = UPLOAD_DIR / filename
+    image.save(file_path)
+
+    pred = prediction(file_path)
+    return render_template(
+        "submit.html",
+        title=disease_info["disease_name"][pred],
+        desc=disease_info["description"][pred],
+        prevent=disease_info["Possible Steps"][pred],
+        image_url=disease_info["image_url"][pred],
+        pred=pred,
+        sname=supplement_info["supplement name"][pred],
+        simage=supplement_info["supplement image"][pred],
+        buy_link=supplement_info["buy link"][pred],
+    )
+
+
+@app.route("/market", methods=["GET", "POST"])
 def market():
-    return render_template('market.html', supplement_image = list(supplement_info['supplement image']),
-                           supplement_name = list(supplement_info['supplement name']), disease = list(disease_info['disease_name']), buy = list(supplement_info['buy link']))
+    return render_template(
+        "market.html",
+        supplement_image=list(supplement_info["supplement image"]),
+        supplement_name=list(supplement_info["supplement name"]),
+        disease=list(disease_info["disease_name"]),
+        buy=list(supplement_info["buy link"]),
+    )
 
-if __name__ == '__main__':
-    app.run(debug=True)
+
+if __name__ == "__main__":
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1")
